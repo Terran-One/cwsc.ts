@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2015",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "importHelpers": true,
+    "downlevelIteration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "noImplicitReturns": true,
+    "declaration": true,
+    "sourceMap": true,
+  },
+  "include": ["src"],
+  "exclude": ["./node_modules", "./src/**/*.spec.ts"],
+}

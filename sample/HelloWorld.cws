@@ -1,0 +1,40 @@
+contract HelloWorld {
+   // You define state inside contract.
+   // You can also declare each state separately. i.e state count:i32
+    state {
+        count:i32,
+        owner:Addr, // It already exists.
+    }
+    instantiate(count:i32){
+        state.count = count;
+        state.owner = msginfo.sender;
+        log {
+            message:"Instantiated"
+        }
+    }
+    exec Increment() {
+        state.count+=1;
+        log {
+            count:state.count,
+        }
+    }
+    exec Reset(count:i32) {
+        state.count = count;
+        log {
+            count:state.count,
+        }
+    }
+    exec MultiplyAndAdd(val1:i32, val2:i32) {
+        state.count = state.count + val1*val2;
+        log {
+            count:state.count,
+        }
+    }
+    query getCount() {
+        return state.count;
+    }
+    query getOwner() {
+        return state.owner;
+    }
+}
+

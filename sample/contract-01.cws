@@ -1,0 +1,206 @@
+// imports all symbols from lib into a struct-like local namespace
+import * as lib from 'some-lib'
+
+// everything in global scope is implicitly exported
+// no statements or expressions allowed at global scope
+// currently, no global variables/constants either
+
+interface CW20 {
+  // NOTE: ; is optional
+  event Transfer(recipient: Addr, amount: u128);
+  event Burn();
+  event Mint();
+  event Send(sender: Addr, contract: Addr, amount: u128, msg: Binary);
+
+  error AuthorizationError(msg: string);
+
+  enum Expiration {
+    Never,
+    Time(Timestamp),
+    Height(u128),
+  }
+
+  enum Color {
+    RGB { r: u8, g: u8, b: u8 },
+    HLS { h: u8, l: u8, s: u8 },
+  }
+
+  // struct supports , and ; and both are optional
+  struct TokenInfo {
+    name: string,
+    symbol: string,
+    decimals: u8,
+    total_supply: u128,
+  }
+
+  exec {
+    // again, ; is optional
+    transfer(recipient: Addr, amount: u128);
+    send(contract: Addr, amount: u128, msg: Binary);
+    // Expiration uses Timestamp which we need to implement.
+    // the `?` in `Expiration?` is syntactic sugar for `Option<Expiration>`, which is an `enum`. we currently have no optional arguments
+    increase_allowance(spender: Addr, amount: u128, expires: Expiration?);
+    decrease_allowance(spender: Addr, amount: u128, expires: Expiration?);
+    transfer_from(owner: Addr, recipient: Addr, amount: u128);
+    send_from(owner: Addr, contract: Addr, amount: u128, msg: Binary);
+    burn_from(owner: Addr, amount: u128);
+    mint(recipient: Addr, amount: u128);
+  }
+
+  query {
+    // `(balance: u128)` is a named tuple
+    balance(address: Addr) -> (balance: u128)
+    token_info() -> (name: string, symbol: string, decimals: u8, total_supply: u128)
+    allowance(owner: string, spender: string) -> (allowance: u128, expires: Expiration)
+    minter() -> (minter: Addr, cap?: u128)
+    marketing_info() -> (
+      project: string?,
+      description: string?,
+      logo: LogoInfo?,
+      marketing: Addr?, // final , is optional
+    )
+    all_allowances(
+      owner: Addr,
+      start_after: Addr?,
+      limit?: u32
+    ) -> (allowances: [AllowanceInfo]) // array of AllowanceInfo inside a named tuple
+    all_accounts(owner: Addr, start_after: Addr?, limit: u32?) -> (accounts: [Addr])
+  }
+}
+
+interface CW20Receiver {
+  exec receive(amount: u128, msg: Binary)
+}
+
+contract CW20Base implements CW20 {
+  struct BalanceInfo {
+    address: Addr,
+    amount: u128,
+  }
+
+  struct MintInfo {
+    minter: Addr,
+    cap: u128?,
+  }
+
+  // state is always publicly readonly
+  // state can only be altered within `exec` methods
+  state token_info: TokenInfo
+  state balances[user: Addr]: u128 // map type
+  state allowances[owner: Addr][spender: Addr]: Allowance // map of map type
+  state total_supply: u128
+  state mint: MintInfo
+
+  state {
+    token_info: TokenInfo
+    balances[user: Addr]: u128
+  }
+
+  instantiate(name: string, symbol: string, decimals: u8, initial_balances: [BalanceInfo], mint: MintInfo?) {
+    // no need to specify struct type since we know what type `state.token_info` is
+    state.token_info = {
+      name,
+      symbol,
+      decimals,
+      total_supply: 0, // final , optional, again
+    }
+    // Array iteration
+    for balance in initial_balances {
+      balances[balance.address] = balance.amount
+      token_info.total_supply += balance.amount
+    }
+
+    // supports destructuring
+    for { address, amount } in initial_balances {
+      state.balances[address]
+      total_supply += amount
+    }
+    // implicit boolean coercion - different for optional types
+    if mint {
+      mint(mint.minter, mint.cap)
+    }
+    
+    // non-event logging of arbitrary key:value attributes
+    // does not need struct type
+    // right hand values are implicitly converted into strings
+    log {
+      method: 'instantiate',
+      name,
+      symbol,
+      decimals,
+    }
+  }
+
+  exec transfer(recipient: Addr, amount: u128) {
+    state.balances[info.sender] -= amount
+    state.balances[recipient] += amount
+    log Transfer(recipient, amount) // log events
+  }
+
+  // CW20Receiver, i.e. specifically contract & interface instances are syntactic sugar on top of Addr
+  exec send(contract: CW20Receiver, amount: u128, msg: Binary) {
+    state.balances[info.sender] -= amount
+    log Send(info.sender, contract, amount, msg)
+    
+    // generic send statement
+    send Wasm::Execute {
+      contract_addr: contract,
+      // object literal syntax, requires explicit typing unless already known like above with `state.token_info`
+      msg: CW20ReceiveMsg {
+        amount,
+        msg,
+      },
+      funds: [],
+    }
+    
+    // syntactic sugar for the above
+    send contract.receive(amount, msg)
+  }
+  
+  exec mint(amount: u128, recipient: Addr) {
+    // destructuring in `let` statement
+    let { minter, cap } = state.mint
+    
+    if msginfo.sender != minter {
+      // fail with error type
+      // errors w/o arguments don't need parantheses
+      fail Unauthorized
+    }
+    
+    // cap! is like `cap.unwrap()` in Rust: cap is optional, so cap! asserts it has a value and fails otherwise
+    if cap and state.total_supply + amount > cap! {
+      // generic failure with error message string
+      fail "Mint cap reached"
+    }
+    
+    state.balances[recipient] += amount
+    state.total_supply += amount
+    
+    // you can call `log` multiple times
+    log {
+      method: 'mint'
+    }
+    log Mint(recipient, amount)
+  }
+
+  query balance(address: Addr) -> (balance: u128) {
+    return state.balances[address]
+  }
+
+  query token_info() -> (name: string, symbol: string, decimals: u8, total_supply: u128) {
+    return state.token_info
+  }
+
+  // implicit mutability state:
+  // if a method assigns to state, it can only be called from other such methods, or from `exec` methods
+  // otherwise, it can be called from all methods, including `query` methods
+  // `fn` methods are implicitly `protected`
+  fn try_increment() {
+    state.total_supply += 4
+  }
+}
+
+// global methods don't know state and can thus always be called
+fn try_increment() {
+  api.debug("try increment!")
+}
